@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="110" fill="#14251f"/>
+  <path d="M90 205h332l-28-90H118z" fill="#e8b85b"/>
+  <path d="M110 205v205h292V205" fill="#f5f6fa"/>
+  <path d="M90 205c0 30 45 30 45 0 0 30 45 30 45 0 0 30 45 30 45 0 0 30 45 30 45 0 0 30 45 30 45 0 0 30 45 30 45 0" fill="none" stroke="#e8b85b" stroke-width="18"/>
+  <text x="256" y="330" font-size="112" font-family="Arial,sans-serif" font-weight="bold" text-anchor="middle" fill="#14251f">KS</text>
+  <text x="256" y="375" font-size="34" font-family="Arial,sans-serif" font-weight="bold" text-anchor="middle" fill="#14251f">POS</text>
+</svg>
