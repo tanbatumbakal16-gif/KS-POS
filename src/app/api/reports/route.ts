@@ -1,8 +1,13 @@
 
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { SaleStatus } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+
+const round = (value: number) =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,9 +27,15 @@ export async function GET(request: NextRequest) {
     const start = startParam ? new Date(startParam) : new Date();
     const end = endParam ? new Date(endParam) : new Date();
 
-    if (!startParam) start.setHours(0, 0, 0, 0);
-    if (!endParam) end.setHours(23, 59, 59, 999);
-    else end.setHours(23, 59, 59, 999);
+    if (!startParam) {
+      start.setHours(0, 0, 0, 0);
+    }
+
+    if (!endParam) {
+      end.setHours(23, 59, 59, 999);
+    } else {
+      end.setHours(23, 59, 59, 999);
+    }
 
     if (
       Number.isNaN(start.getTime()) ||
@@ -55,6 +66,7 @@ export async function GET(request: NextRequest) {
         },
         orderBy: { createdAt: "desc" },
       }),
+
       prisma.expense.findMany({
         where: {
           branchId: session.branchId,
@@ -64,7 +76,8 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    const grossSales = sales.reduce(
+    // Sale.total is the amount after discounts.
+    const netSales = sales.reduce(
       (sum, sale) => sum + Number(sale.total),
       0
     );
@@ -73,6 +86,8 @@ export async function GET(request: NextRequest) {
       (sum, sale) => sum + Number(sale.discount),
       0
     );
+
+    const grossSales = netSales + discounts;
 
     const costOfGoodsSold = sales.reduce(
       (sum, sale) =>
@@ -96,37 +111,41 @@ export async function GET(request: NextRequest) {
     for (const sale of sales) {
       for (const payment of sale.payments) {
         const method = payment.method;
+
         paymentBreakdown[method] =
           (paymentBreakdown[method] || 0) +
           Number(payment.amount);
       }
     }
 
-    const round = (value: number) =>
-      Math.round((value + Number.EPSILON) * 100) / 100;
+    const estimatedNetProfit =
+      netSales - costOfGoodsSold - totalExpenses;
 
     return NextResponse.json({
       success: true,
+
       period: {
         start: start.toISOString(),
         end: end.toISOString(),
       },
+
       summary: {
         grossSales: round(grossSales),
+        netSales: round(netSales),
         discounts: round(discounts),
         transactionCount: sales.length,
         costOfGoodsSold: round(costOfGoodsSold),
         expenses: round(totalExpenses),
-        estimatedNetProfit: round(
-          grossSales - costOfGoodsSold - totalExpenses
-        ),
+        estimatedNetProfit: round(estimatedNetProfit),
       },
+
       paymentBreakdown: Object.fromEntries(
         Object.entries(paymentBreakdown).map(([key, value]) => [
           key,
           round(value),
         ])
       ),
+
       expensesList: expenses.map((expense) => ({
         id: expense.id,
         description: expense.description,
@@ -134,6 +153,7 @@ export async function GET(request: NextRequest) {
         amount: Number(expense.amount),
         createdAt: expense.createdAt,
       })),
+
       recentSales: sales.slice(0, 50).map((sale) => ({
         id: sale.id,
         receiptNumber: sale.receiptNumber,
