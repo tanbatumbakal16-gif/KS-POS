@@ -1,6 +1,7 @@
+
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import InstallButton from "./InstallButton";
 
 const sections = [
@@ -17,41 +18,124 @@ const sections = [
   "Settings",
 ];
 
+type Product = {
+  name: string;
+  price: number;
+  stock: number;
+  barcode: string;
+};
+
 export default function DashboardClient() {
   const [active, setActive] = useState("Dashboard");
-  const [products, setProducts] = useState<
-    { name: string; price: number; stock: number; barcode: string }[]
-  >([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [stock, setStock] = useState("");
   const [barcode, setBarcode] = useState("");
+  const [inventoryLoading, setInventoryLoading] = useState(true);
+  const [inventoryError, setInventoryError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  function addProduct(e: React.FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    async function loadInventory() {
+      try {
+        setInventoryLoading(true);
+        setInventoryError("");
+
+        const response = await fetch("/api/inventory");
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Unable to load inventory.");
+        }
+
+        setProducts(
+          (data.products || []).map(
+            (product: {
+              name: string;
+              sellingPrice: number;
+              stock: number;
+              barcode: string | null;
+            }) => ({
+              name: product.name,
+              price: product.sellingPrice,
+              stock: product.stock,
+              barcode: product.barcode || "",
+            })
+          )
+        );
+      } catch (error) {
+        setInventoryError(
+          error instanceof Error
+            ? error.message
+            : "Inventory loading failed."
+        );
+      } finally {
+        setInventoryLoading(false);
+      }
+    }
+
+    loadInventory();
+  }, []);
+
+  async function addProduct(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    setInventoryError("");
 
-    if (
-      !name.trim() ||
-      Number(price) < 0 ||
-      Number(stock) < 0
-    ) return;
+    if (!name.trim() || Number(price) < 0 || Number(stock) < 0) {
+      setInventoryError("Please enter valid product details.");
+      return;
+    }
 
-    setProducts([
-      ...products,
-      {
-        name: name.trim(),
-        price: Number(price),
-        stock: Number(stock),
-        barcode,
-      },
-    ]);
+    try {
+      setSaving(true);
 
-    setName("");
-    setPrice("");
-    setStock("");
-    setBarcode("");
-    setShowAdd(false);
+      const response = await fetch("/api/inventory", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: name.trim(),
+          barcode: barcode.trim(),
+          sellingPrice: Number(price),
+          costPrice: 0,
+          quantity: Number(stock),
+          lowStockAt: 5,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to save product.");
+      }
+
+      setProducts((current) => [
+        ...current,
+        {
+          name: data.product.name,
+          price: data.product.sellingPrice,
+          stock: data.product.stock,
+          barcode: data.product.barcode || "",
+        },
+      ]);
+
+      setName("");
+      setPrice("");
+      setStock("");
+      setBarcode("");
+      setShowAdd(false);
+    } catch (error) {
+      setInventoryError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save product."
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -76,7 +160,6 @@ export default function DashboardClient() {
             <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-slate-400">
               Main Menu
             </p>
-
             <nav className="space-y-1">
               {sections.map((item, index) => (
                 <button
@@ -123,9 +206,7 @@ export default function DashboardClient() {
               <span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
                 ● System online
               </span>
-
               <InstallButton />
-
               <form action="/api/auth/logout" method="POST">
                 <button
                   type="submit"
@@ -134,7 +215,6 @@ export default function DashboardClient() {
                   Logout
                 </button>
               </form>
-
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#14251f] font-bold text-white">
                 KS
               </div>
@@ -158,7 +238,7 @@ export default function DashboardClient() {
                     ["Today's Sales", "₱0.00", "↗", "All transactions"],
                     ["Transactions", "0", "#", "Today's orders"],
                     ["Products", String(products.length), "▤", "Registered products"],
-                    ["Low Stock", "0", "!", "Needs attention"],
+                    ["Low Stock", String(products.filter((p) => p.stock <= 5).length), "!", "Needs attention"],
                   ].map(([label, value, icon, description]) => (
                     <div
                       key={label}
@@ -180,56 +260,39 @@ export default function DashboardClient() {
 
                 <div className="mt-7 grid gap-5 xl:grid-cols-3">
                   <div className="rounded-2xl border border-slate-200 bg-white p-6 xl:col-span-2">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="font-bold">Sales Activity</h3>
-                        <p className="mt-1 text-xs text-slate-400">
-                          Sales chart will appear when transactions are recorded.
-                        </p>
-                      </div>
-                      <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs">
-                        Today
-                      </span>
-                    </div>
-
+                    <h3 className="font-bold">Sales Activity</h3>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Sales chart will appear when transactions are recorded.
+                    </p>
                     <div className="flex h-52 flex-col items-center justify-center text-center">
                       <span className="text-4xl text-slate-300">▥</span>
                       <p className="mt-3 text-sm font-semibold text-slate-500">
                         No sales recorded yet
-                      </p>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Your real sales data will appear here.
                       </p>
                     </div>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-white p-6">
                     <h3 className="font-bold">Quick Actions</h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Common store operations
-                    </p>
-
                     <div className="mt-5 space-y-3">
                       <button
                         onClick={() => setActive("Point of Sale")}
-                        className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-left text-sm font-semibold text-white hover:bg-emerald-700"
+                        className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-left text-sm font-semibold text-white"
                       >
                         ＋ New Sale
                       </button>
-
                       <button
                         onClick={() => {
                           setActive("Inventory");
                           setShowAdd(true);
                         }}
-                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold hover:bg-slate-50"
+                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
                       >
                         ＋ Add Product
                       </button>
-
                       <button
                         onClick={() => setActive("Reports")}
-                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold hover:bg-slate-50"
+                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
                       >
                         ▤ View Reports
                       </button>
@@ -248,14 +311,25 @@ export default function DashboardClient() {
                       Manage your store products.
                     </p>
                   </div>
-
                   <button
                     onClick={() => setShowAdd(true)}
-                    className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-700"
+                    className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white"
                   >
                     ＋ Add Product
                   </button>
                 </div>
+
+                {inventoryLoading && (
+                  <p className="mt-4 text-sm text-slate-500">
+                    Loading inventory...
+                  </p>
+                )}
+
+                {inventoryError && (
+                  <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                    {inventoryError}
+                  </p>
+                )}
 
                 <div className="mt-6 overflow-x-auto">
                   <table className="w-full text-left text-sm">
@@ -267,20 +341,19 @@ export default function DashboardClient() {
                         <th className="p-3">Stock</th>
                       </tr>
                     </thead>
-
                     <tbody>
-                      {products.map((p, i) => (
-                        <tr key={i} className="border-b border-slate-100">
-                          <td className="p-3 font-semibold">{p.name}</td>
-                          <td className="p-3">{p.barcode || "—"}</td>
-                          <td className="p-3">₱{p.price.toFixed(2)}</td>
-                          <td className="p-3">{p.stock}</td>
+                      {products.map((product, index) => (
+                        <tr key={`${product.name}-${index}`} className="border-b border-slate-100">
+                          <td className="p-3 font-semibold">{product.name}</td>
+                          <td className="p-3">{product.barcode || "—"}</td>
+                          <td className="p-3">₱{product.price.toFixed(2)}</td>
+                          <td className="p-3">{product.stock}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
 
-                  {products.length === 0 && (
+                  {!inventoryLoading && products.length === 0 && (
                     <p className="py-12 text-center text-sm text-slate-400">
                       No products yet. Select Add Product to begin.
                     </p>
@@ -296,9 +369,7 @@ export default function DashboardClient() {
                 </p>
                 <h3 className="mt-2 text-2xl font-bold">{active}</h3>
                 <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500">
-                  This module is part of the KS POS build plan. Its real
-                  database operations and permissions will be implemented
-                  in the next development stages.
+                  This module still needs its database operations and interface implementation.
                 </p>
               </div>
             )}
@@ -330,17 +401,17 @@ export default function DashboardClient() {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-200 p-3 outline-none focus:border-emerald-500"
+                  className="mt-2 w-full rounded-xl border border-slate-200 p-3"
                   placeholder="Enter product name"
                 />
               </label>
 
               <label className="block text-sm font-medium">
-                Barcode / SKU
+                Barcode
                 <input
                   value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
-                  className="mt-2 w-full rounded-xl border border-slate-200 p-3 outline-none focus:border-emerald-500"
+                  className="mt-2 w-full rounded-xl border border-slate-200 p-3"
                   placeholder="Optional barcode"
                 />
               </label>
@@ -355,7 +426,7 @@ export default function DashboardClient() {
                     step="0.01"
                     value={price}
                     onChange={(e) => setPrice(e.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 p-3 outline-none focus:border-emerald-500"
+                    className="mt-2 w-full rounded-xl border border-slate-200 p-3"
                   />
                 </label>
 
@@ -368,17 +439,22 @@ export default function DashboardClient() {
                     step="1"
                     value={stock}
                     onChange={(e) => setStock(e.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 p-3 outline-none focus:border-emerald-500"
+                    className="mt-2 w-full rounded-xl border border-slate-200 p-3"
                   />
                 </label>
               </div>
             </div>
 
+            {inventoryError && (
+              <p className="mt-3 text-sm text-red-600">{inventoryError}</p>
+            )}
+
             <button
               type="submit"
-              className="mt-6 w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white hover:bg-emerald-700"
+              disabled={saving}
+              className="mt-6 w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white disabled:opacity-50"
             >
-              Save Product
+              {saving ? "Saving..." : "Save Product"}
             </button>
           </form>
         </div>
