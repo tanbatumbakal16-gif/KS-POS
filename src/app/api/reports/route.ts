@@ -1,5 +1,5 @@
 
-import { connection, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { SaleStatus } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -9,18 +9,7 @@ const round = (value: number) =>
 
 export async function GET(request: NextRequest) {
   try {
-    // Wait for a real request before accessing cookies or the database.
-    await connection();
-
-    const session = await getSession();
-
-    if (!session) {
-      return NextResponse.json(
-        { error: "Please log in first." },
-        { status: 401 }
-      );
-    }
-
+    // Access request-specific data before reading session cookies.
     const params = request.nextUrl.searchParams;
     const startParam = params.get("start");
     const endParam = params.get("end");
@@ -28,15 +17,8 @@ export async function GET(request: NextRequest) {
     const start = startParam ? new Date(startParam) : new Date();
     const end = endParam ? new Date(endParam) : new Date();
 
-    if (!startParam) {
-      start.setHours(0, 0, 0, 0);
-    }
-
-    if (!endParam) {
-      end.setHours(23, 59, 59, 999);
-    } else {
-      end.setHours(23, 59, 59, 999);
-    }
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
 
     if (
       Number.isNaN(start.getTime()) ||
@@ -46,6 +28,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: "Invalid report date range." },
         { status: 400 }
+      );
+    }
+
+    const session = await getSession();
+
+    if (!session) {
+      return NextResponse.json(
+        { error: "Please log in first." },
+        { status: 401 }
       );
     }
 
@@ -67,7 +58,6 @@ export async function GET(request: NextRequest) {
         },
         orderBy: { createdAt: "desc" },
       }),
-
       prisma.expense.findMany({
         where: {
           branchId: session.branchId,
@@ -110,22 +100,18 @@ export async function GET(request: NextRequest) {
 
     for (const sale of sales) {
       for (const payment of sale.payments) {
-        const method = payment.method;
-
-        paymentBreakdown[method] =
-          (paymentBreakdown[method] || 0) +
+        paymentBreakdown[payment.method] =
+          (paymentBreakdown[payment.method] || 0) +
           Number(payment.amount);
       }
     }
 
     return NextResponse.json({
       success: true,
-
       period: {
         start: start.toISOString(),
         end: end.toISOString(),
       },
-
       summary: {
         grossSales: round(grossSales),
         netSales: round(netSales),
@@ -137,14 +123,12 @@ export async function GET(request: NextRequest) {
           netSales - costOfGoodsSold - totalExpenses
         ),
       },
-
       paymentBreakdown: Object.fromEntries(
         Object.entries(paymentBreakdown).map(([key, value]) => [
           key,
           round(value),
         ])
       ),
-
       expensesList: expenses.map((expense) => ({
         id: expense.id,
         description: expense.description,
@@ -152,7 +136,6 @@ export async function GET(request: NextRequest) {
         amount: Number(expense.amount),
         createdAt: expense.createdAt,
       })),
-
       recentSales: sales.slice(0, 50).map((sale) => ({
         id: sale.id,
         receiptNumber: sale.receiptNumber,
