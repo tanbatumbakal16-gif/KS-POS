@@ -4,7 +4,6 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/auth";
 
-export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
