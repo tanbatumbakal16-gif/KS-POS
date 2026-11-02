@@ -1,7 +1,5 @@
 
-export const dynamic = "force-dynamic";
-
-import { NextRequest, NextResponse } from "next/server";
+import { connection, NextRequest, NextResponse } from "next/server";
 import { SaleStatus } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -11,6 +9,9 @@ const round = (value: number) =>
 
 export async function GET(request: NextRequest) {
   try {
+    // Wait for a real request before accessing cookies or the database.
+    await connection();
+
     const session = await getSession();
 
     if (!session) {
@@ -76,7 +77,6 @@ export async function GET(request: NextRequest) {
       }),
     ]);
 
-    // Sale.total is the amount after discounts.
     const netSales = sales.reduce(
       (sum, sale) => sum + Number(sale.total),
       0
@@ -118,9 +118,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const estimatedNetProfit =
-      netSales - costOfGoodsSold - totalExpenses;
-
     return NextResponse.json({
       success: true,
 
@@ -136,7 +133,9 @@ export async function GET(request: NextRequest) {
         transactionCount: sales.length,
         costOfGoodsSold: round(costOfGoodsSold),
         expenses: round(totalExpenses),
-        estimatedNetProfit: round(estimatedNetProfit),
+        estimatedNetProfit: round(
+          netSales - costOfGoodsSold - totalExpenses
+        ),
       },
 
       paymentBreakdown: Object.fromEntries(
