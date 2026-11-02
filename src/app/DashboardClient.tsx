@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import InstallButton from "./InstallButton";
 
 const sections = [
@@ -26,23 +26,52 @@ type Product = {
   barcode: string;
 };
 
-type CartItem = Product & {
-  quantity: number;
-};
-
+type CartItem = Product & { quantity: number };
 type PaymentMethod = "CASH" | "GCASH" | "MAYA" | "BANK" | "CARD";
 
+type ReportData = {
+  summary: {
+    grossSales: number;
+    discounts: number;
+    transactionCount: number;
+    cogs: number;
+    expenses: number;
+    netProfit: number;
+    paymentBreakdown: Record<string, number>;
+  };
+  expensesList: Array<{
+    id: string;
+    description: string;
+    category?: string | null;
+    amount: number;
+    createdAt: string;
+  }>;
+  recentSales: Array<{
+    id: string;
+    receiptNumber: string;
+    total: number;
+    createdAt: string;
+  }>;
+};
+
 const peso = (amount: number) =>
-  `₱${amount.toLocaleString("en-PH", {
+  `₱${Number(amount || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
 
+const localDate = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 export default function DashboardClient() {
   const [active, setActive] = useState("Dashboard");
+
   const [products, setProducts] = useState<Product[]>([]);
   const [showAdd, setShowAdd] = useState(false);
-
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [stock, setStock] = useState("");
@@ -61,6 +90,7 @@ export default function DashboardClient() {
   const [discount, setDiscount] = useState("0");
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
+
   const [receipt, setReceipt] = useState<{
     receiptNumber: string;
     total: number;
@@ -69,7 +99,13 @@ export default function DashboardClient() {
     balance: number;
   } | null>(null);
 
-  async function loadInventory() {
+  const [report, setReport] = useState<ReportData | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportStart, setReportStart] = useState(localDate());
+  const [reportEnd, setReportEnd] = useState(localDate());
+
+  const loadInventory = useCallback(async () => {
     try {
       setInventoryLoading(true);
       setInventoryError("");
@@ -100,18 +136,49 @@ export default function DashboardClient() {
       );
     } catch (error) {
       setInventoryError(
-        error instanceof Error
-          ? error.message
-          : "Inventory loading failed."
+        error instanceof Error ? error.message : "Inventory loading failed."
       );
     } finally {
       setInventoryLoading(false);
     }
-  }
+  }, []);
+
+  const loadReports = useCallback(async () => {
+    try {
+      setReportLoading(true);
+      setReportError("");
+
+      const params = new URLSearchParams({
+        start: reportStart,
+        end: reportEnd,
+      });
+
+      const response = await fetch(`/api/reports?${params.toString()}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to load reports.");
+      }
+
+      setReport(data);
+    } catch (error) {
+      setReportError(
+        error instanceof Error ? error.message : "Reports loading failed."
+      );
+    } finally {
+      setReportLoading(false);
+    }
+  }, [reportStart, reportEnd]);
 
   useEffect(() => {
     loadInventory();
-  }, []);
+  }, [loadInventory]);
+
+  useEffect(() => {
+    if (active === "Reports") {
+      loadReports();
+    }
+  }, [active, loadReports]);
 
   async function addProduct(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -133,9 +200,7 @@ export default function DashboardClient() {
 
       const response = await fetch("/api/inventory", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
           barcode: barcode.trim(),
@@ -153,7 +218,6 @@ export default function DashboardClient() {
       }
 
       await loadInventory();
-
       setName("");
       setPrice("");
       setStock("");
@@ -161,9 +225,7 @@ export default function DashboardClient() {
       setShowAdd(false);
     } catch (error) {
       setInventoryError(
-        error instanceof Error
-          ? error.message
-          : "Unable to save product."
+        error instanceof Error ? error.message : "Unable to save product."
       );
     } finally {
       setSaving(false);
@@ -179,15 +241,17 @@ export default function DashboardClient() {
       return;
     }
 
+    const existing = cart.find((item) => item.id === product.id);
+
+    if (existing && existing.quantity >= product.stock) {
+      setCheckoutError(`Not enough stock for ${product.name}.`);
+      return;
+    }
+
     setCart((current) => {
-      const existing = current.find((item) => item.id === product.id);
+      const found = current.find((item) => item.id === product.id);
 
-      if (existing) {
-        if (existing.quantity >= product.stock) {
-          setCheckoutError(`Not enough stock for ${product.name}.`);
-          return current;
-        }
-
+      if (found) {
         return current.map((item) =>
           item.id === product.id
             ? { ...item, quantity: item.quantity + 1 }
@@ -225,7 +289,6 @@ export default function DashboardClient() {
 
   function findBarcode() {
     const code = search.trim();
-
     if (!code) return;
 
     const product = products.find(
@@ -242,7 +305,6 @@ export default function DashboardClient() {
 
   const filteredProducts = products.filter((product) => {
     const term = search.toLowerCase();
-
     return (
       product.name.toLowerCase().includes(term) ||
       product.barcode.toLowerCase().includes(term)
@@ -250,9 +312,7 @@ export default function DashboardClient() {
   });
 
   const subtotal = Number(
-    cart
-      .reduce((sum, item) => sum + item.price * item.quantity, 0)
-      .toFixed(2)
+    cart.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2)
   );
 
   const discountValue = Math.max(0, Number(discount) || 0);
@@ -280,9 +340,7 @@ export default function DashboardClient() {
     }
 
     if (amount < total) {
-      setCheckoutError(
-        "Payment is less than the total. This screen currently requires full payment."
-      );
+      setCheckoutError("Payment is less than the total.");
       return;
     }
 
@@ -291,9 +349,7 @@ export default function DashboardClient() {
 
       const response = await fetch("/api/sales", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           items: cart.map((item) => ({
             productId: item.id,
@@ -318,10 +374,10 @@ export default function DashboardClient() {
 
       setReceipt({
         receiptNumber: data.sale.receiptNumber,
-        total: data.sale.total,
-        amountPaid: data.sale.amountPaid,
-        change: data.sale.change,
-        balance: data.sale.balance,
+        total: Number(data.sale.total),
+        amountPaid: Number(data.sale.amountPaid),
+        change: Number(data.sale.change),
+        balance: Number(data.sale.balance),
       });
 
       setCart([]);
@@ -389,7 +445,7 @@ export default function DashboardClient() {
                 Cloud-ready store system
               </p>
               <p className="mt-3 text-[10px] text-emerald-300">
-                ● Local preview
+                ● Connected application
               </p>
             </div>
           </div>
@@ -430,15 +486,11 @@ export default function DashboardClient() {
                   <p className="text-sm text-slate-500">
                     Welcome to your store management workspace.
                   </p>
-                  <h3 className="mt-1 text-2xl font-bold">
-                    Store Overview
-                  </h3>
+                  <h3 className="mt-1 text-2xl font-bold">Store Overview</h3>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   {[
-                    ["Today's Sales", "₱0.00", "↗", "Sales summary pending"],
-                    ["Transactions", "0", "#", "Today's orders"],
                     ["Products", String(products.length), "▤", "Registered products"],
                     [
                       "Low Stock",
@@ -446,6 +498,8 @@ export default function DashboardClient() {
                       "!",
                       "Needs attention",
                     ],
+                    ["Today's Sales", report ? peso(report.summary.grossSales) : "Open Reports", "↗", "Sales summary"],
+                    ["Transactions", report ? String(report.summary.transactionCount) : "Open Reports", "#", "Sales count"],
                   ].map(([label, value, icon, description]) => (
                     <div
                       key={label}
@@ -457,53 +511,36 @@ export default function DashboardClient() {
                           {icon}
                         </span>
                       </div>
-                      <p className="mt-4 text-3xl font-bold">{value}</p>
-                      <p className="mt-1 text-xs text-slate-400">
-                        {description}
-                      </p>
+                      <p className="mt-4 text-2xl font-bold">{value}</p>
+                      <p className="mt-1 text-xs text-slate-400">{description}</p>
                     </div>
                   ))}
                 </div>
 
-                <div className="mt-7 grid gap-5 xl:grid-cols-3">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-6 xl:col-span-2">
-                    <h3 className="font-bold">Sales Activity</h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Sales chart will appear when transaction reports are implemented.
-                    </p>
-                    <div className="flex h-52 flex-col items-center justify-center text-center">
-                      <span className="text-4xl text-slate-300">▥</span>
-                      <p className="mt-3 text-sm font-semibold text-slate-500">
-                        Sales chart pending
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-6">
-                    <h3 className="font-bold">Quick Actions</h3>
-                    <div className="mt-5 space-y-3">
-                      <button
-                        onClick={() => setActive("Point of Sale")}
-                        className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-left text-sm font-semibold text-white"
-                      >
-                        ＋ New Sale
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActive("Inventory");
-                          setShowAdd(true);
-                        }}
-                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
-                      >
-                        ＋ Add Product
-                      </button>
-                      <button
-                        onClick={() => setActive("Reports")}
-                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
-                      >
-                        ▤ View Reports
-                      </button>
-                    </div>
+                <div className="mt-7 rounded-2xl border border-slate-200 bg-white p-6">
+                  <h3 className="font-bold">Quick Actions</h3>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    <button
+                      onClick={() => setActive("Point of Sale")}
+                      className="rounded-xl bg-emerald-600 px-4 py-3 text-left text-sm font-semibold text-white"
+                    >
+                      ＋ New Sale
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActive("Inventory");
+                        setShowAdd(true);
+                      }}
+                      className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
+                    >
+                      ＋ Add Product
+                    </button>
+                    <button
+                      onClick={() => setActive("Reports")}
+                      className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
+                    >
+                      ▤ View Reports
+                    </button>
                   </div>
                 </div>
               </>
@@ -571,7 +608,6 @@ export default function DashboardClient() {
                           </p>
                         </button>
                       ))}
-
                       {filteredProducts.length === 0 && (
                         <p className="col-span-full py-10 text-center text-sm text-slate-400">
                           No matching products found.
@@ -594,10 +630,7 @@ export default function DashboardClient() {
 
                   <div className="mt-4 space-y-3">
                     {cart.map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-xl border border-slate-100 p-3"
-                      >
+                      <div key={item.id} className="rounded-xl border border-slate-100 p-3">
                         <div className="flex justify-between gap-2">
                           <div>
                             <p className="font-semibold">{item.name}</p>
@@ -611,9 +644,7 @@ export default function DashboardClient() {
                         </div>
                         <div className="mt-3 flex items-center gap-3">
                           <button
-                            onClick={() =>
-                              changeQuantity(item.id, item.quantity - 1)
-                            }
+                            onClick={() => changeQuantity(item.id, item.quantity - 1)}
                             className="h-8 w-8 rounded-lg border border-slate-200 font-bold"
                           >
                             −
@@ -622,9 +653,7 @@ export default function DashboardClient() {
                             {item.quantity}
                           </span>
                           <button
-                            onClick={() =>
-                              changeQuantity(item.id, item.quantity + 1)
-                            }
+                            onClick={() => changeQuantity(item.id, item.quantity + 1)}
                             className="h-8 w-8 rounded-lg border border-slate-200 font-bold"
                           >
                             +
@@ -638,7 +667,6 @@ export default function DashboardClient() {
                         </div>
                       </div>
                     ))}
-
                     {cart.length === 0 && (
                       <p className="py-8 text-center text-sm text-slate-400">
                         Your cart is empty.
@@ -673,9 +701,7 @@ export default function DashboardClient() {
                       Payment method
                       <select
                         value={paymentMethod}
-                        onChange={(e) =>
-                          setPaymentMethod(e.target.value as PaymentMethod)
-                        }
+                        onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                         className="mt-2 w-full rounded-xl border border-slate-200 p-3"
                       >
                         <option value="CASH">Cash</option>
@@ -779,9 +805,7 @@ export default function DashboardClient() {
                 </div>
 
                 {inventoryLoading && (
-                  <p className="mt-4 text-sm text-slate-500">
-                    Loading inventory...
-                  </p>
+                  <p className="mt-4 text-sm text-slate-500">Loading inventory...</p>
                 )}
 
                 {inventoryError && (
@@ -825,8 +849,8 @@ export default function DashboardClient() {
               <div className="rounded-2xl border border-slate-200 bg-white p-6">
                 <h3 className="text-xl font-bold">Barcode Scanner</h3>
                 <p className="mt-2 text-sm text-slate-500">
-                  Connect a USB or Bluetooth barcode scanner, then scan into this field.
-                  Most scanners type the barcode and press Enter.
+                  Connect a USB or Bluetooth barcode scanner. Most scanners type
+                  the barcode and press Enter.
                 </p>
                 <div className="mt-5 flex flex-wrap gap-2">
                   <input
@@ -858,10 +882,188 @@ export default function DashboardClient() {
               </div>
             )}
 
+            {active === "Reports" && (
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-end justify-between gap-4">
+                  <div>
+                    <h3 className="text-2xl font-bold">Sales Reports</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Sales, discounts, expenses and estimated profit.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="text-sm">
+                      Start date
+                      <input
+                        type="date"
+                        value={reportStart}
+                        onChange={(e) => setReportStart(e.target.value)}
+                        className="mt-1 block rounded-lg border border-slate-200 p-2"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      End date
+                      <input
+                        type="date"
+                        value={reportEnd}
+                        onChange={(e) => setReportEnd(e.target.value)}
+                        className="mt-1 block rounded-lg border border-slate-200 p-2"
+                      />
+                    </label>
+                    <button
+                      onClick={loadReports}
+                      disabled={reportLoading}
+                      className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white disabled:opacity-50"
+                    >
+                      {reportLoading ? "Loading..." : "Refresh"}
+                    </button>
+                  </div>
+                </div>
+
+                {reportError && (
+                  <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                    {reportError}
+                  </p>
+                )}
+
+                {reportLoading && (
+                  <p className="py-8 text-center text-slate-500">
+                    Loading report data...
+                  </p>
+                )}
+
+                {report && (
+                  <>
+                    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                      {[
+                        ["Gross Sales", peso(report.summary.grossSales)],
+                        ["Discounts", peso(report.summary.discounts)],
+                        ["Transactions", String(report.summary.transactionCount)],
+                        ["Cost of Goods Sold", peso(report.summary.cogs)],
+                        ["Expenses", peso(report.summary.expenses)],
+                        ["Estimated Net Profit", peso(report.summary.netProfit)],
+                      ].map(([label, value]) => (
+                        <div
+                          key={label}
+                          className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                        >
+                          <p className="text-sm text-slate-500">{label}</p>
+                          <p className="mt-3 text-2xl font-bold">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                      <h3 className="font-bold">Payment Breakdown</h3>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {Object.entries(report.summary.paymentBreakdown || {}).map(
+                          ([method, amount]) => (
+                            <div key={method} className="rounded-xl bg-slate-50 p-4">
+                              <p className="text-sm text-slate-500">{method}</p>
+                              <p className="mt-1 text-lg font-bold">
+                                {peso(Number(amount))}
+                              </p>
+                            </div>
+                          )
+                        )}
+                        {Object.keys(report.summary.paymentBreakdown || {}).length === 0 && (
+                          <p className="text-sm text-slate-400">
+                            No payment records for this period.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                      <h3 className="font-bold">Recent Sales</h3>
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                            <tr>
+                              <th className="p-3">Receipt</th>
+                              <th className="p-3">Date</th>
+                              <th className="p-3 text-right">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {report.recentSales.map((sale) => (
+                              <tr key={sale.id} className="border-b border-slate-100">
+                                <td className="p-3 font-semibold">
+                                  {sale.receiptNumber}
+                                </td>
+                                <td className="p-3">
+                                  {new Date(sale.createdAt).toLocaleString("en-PH")}
+                                </td>
+                                <td className="p-3 text-right font-semibold">
+                                  {peso(Number(sale.total))}
+                                </td>
+                              </tr>
+                            ))}
+                            {report.recentSales.length === 0 && (
+                              <tr>
+                                <td colSpan={3} className="p-6 text-center text-slate-400">
+                                  No sales for this date range.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                      <h3 className="font-bold">Expenses in Selected Period</h3>
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                            <tr>
+                              <th className="p-3">Description</th>
+                              <th className="p-3">Category</th>
+                              <th className="p-3">Date</th>
+                              <th className="p-3 text-right">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {report.expensesList.map((expense) => (
+                              <tr key={expense.id} className="border-b border-slate-100">
+                                <td className="p-3 font-semibold">{expense.description}</td>
+                                <td className="p-3">{expense.category || "—"}</td>
+                                <td className="p-3">
+                                  {new Date(expense.createdAt).toLocaleDateString("en-PH")}
+                                </td>
+                                <td className="p-3 text-right">
+                                  {peso(Number(expense.amount))}
+                                </td>
+                              </tr>
+                            ))}
+                            {report.expensesList.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="p-6 text-center text-slate-400">
+                                  No expenses for this date range.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {!report && !reportLoading && !reportError && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-500">
+                    Select a date range to view your reports.
+                  </div>
+                )}
+              </div>
+            )}
+
             {active !== "Dashboard" &&
               active !== "Inventory" &&
               active !== "Point of Sale" &&
-              active !== "Barcode Scanner" && (
+              active !== "Barcode Scanner" &&
+              active !== "Reports" && (
                 <div className="rounded-2xl border border-slate-200 bg-white p-8">
                   <p className="text-xs font-bold uppercase tracking-widest text-emerald-600">
                     KS POS Module
