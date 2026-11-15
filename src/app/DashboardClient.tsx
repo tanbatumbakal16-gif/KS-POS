@@ -54,6 +54,43 @@ type ReportData = {
   }>;
 };
 
+async function fetchInventory(): Promise<Product[]> {
+  const response = await fetch("/api/inventory");
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "Unable to load inventory.");
+  }
+
+  return (data.products || []).map(
+    (product: {
+      id: string;
+      name: string;
+      sellingPrice: number;
+      stock: number;
+      barcode: string | null;
+    }) => ({
+      id: product.id,
+      name: product.name,
+      price: Number(product.sellingPrice),
+      stock: Number(product.stock),
+      barcode: product.barcode || "",
+    })
+  );
+}
+
+async function fetchReports(start: string, end: string): Promise<ReportData> {
+  const params = new URLSearchParams({ start, end });
+  const response = await fetch(`/api/reports?${params.toString()}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || "Unable to load reports.");
+  }
+
+  return data;
+}
+
 const peso = (amount: number) =>
   `₱${Number(amount || 0).toLocaleString("en-PH", {
     minimumFractionDigits: 2,
@@ -109,31 +146,7 @@ export default function DashboardClient() {
     try {
       setInventoryLoading(true);
       setInventoryError("");
-
-      const response = await fetch("/api/inventory");
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Unable to load inventory.");
-      }
-
-      setProducts(
-        (data.products || []).map(
-          (product: {
-            id: string;
-            name: string;
-            sellingPrice: number;
-            stock: number;
-            barcode: string | null;
-          }) => ({
-            id: product.id,
-            name: product.name,
-            price: Number(product.sellingPrice),
-            stock: Number(product.stock),
-            barcode: product.barcode || "",
-          })
-        )
-      );
+      setProducts(await fetchInventory());
     } catch (error) {
       setInventoryError(
         error instanceof Error ? error.message : "Inventory loading failed."
@@ -147,20 +160,7 @@ export default function DashboardClient() {
     try {
       setReportLoading(true);
       setReportError("");
-
-      const params = new URLSearchParams({
-        start: reportStart,
-        end: reportEnd,
-      });
-
-      const response = await fetch(`/api/reports?${params.toString()}`);
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Unable to load reports.");
-      }
-
-      setReport(data);
+      setReport(await fetchReports(reportStart, reportEnd));
     } catch (error) {
       setReportError(
         error instanceof Error ? error.message : "Reports loading failed."
@@ -171,14 +171,60 @@ export default function DashboardClient() {
   }, [reportStart, reportEnd]);
 
   useEffect(() => {
-    loadInventory();
-  }, [loadInventory]);
+    let cancelled = false;
+
+    async function loadInitialInventory() {
+      try {
+        const inventory = await fetchInventory();
+        if (!cancelled) {
+          setProducts(inventory);
+          setInventoryError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setInventoryError(
+            error instanceof Error ? error.message : "Inventory loading failed."
+          );
+        }
+      } finally {
+        if (!cancelled) setInventoryLoading(false);
+      }
+    }
+
+    void loadInitialInventory();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    if (active === "Reports") {
-      loadReports();
+    if (active !== "Reports") return;
+
+    let cancelled = false;
+
+    async function loadActiveReports() {
+      try {
+        const data = await fetchReports(reportStart, reportEnd);
+        if (!cancelled) {
+          setReport(data);
+          setReportError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setReportError(
+            error instanceof Error ? error.message : "Reports loading failed."
+          );
+        }
+      } finally {
+        if (!cancelled) setReportLoading(false);
+      }
     }
-  }, [active, loadReports]);
+
+    void loadActiveReports();
+    return () => {
+      cancelled = true;
+    };
+  }, [active, reportStart, reportEnd]);
 
   async function addProduct(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -422,7 +468,14 @@ export default function DashboardClient() {
               {sections.map((item, index) => (
                 <button
                   key={item}
-                  onClick={() => setActive(item)}
+                  onClick={() => {
+                    if (item === "Reports" && active === "Reports") {
+                      void loadReports();
+                    } else {
+                      if (item === "Reports") setReportLoading(true);
+                      setActive(item);
+                    }
+                  }}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition ${
                     active === item
                       ? "bg-emerald-500 font-semibold text-white shadow-lg"
@@ -536,7 +589,10 @@ export default function DashboardClient() {
                       ＋ Add Product
                     </button>
                     <button
-                      onClick={() => setActive("Reports")}
+                      onClick={() => {
+                        setReportLoading(true);
+                        setActive("Reports");
+                      }}
                       className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold"
                     >
                       ▤ View Reports
@@ -898,7 +954,10 @@ export default function DashboardClient() {
                       <input
                         type="date"
                         value={reportStart}
-                        onChange={(e) => setReportStart(e.target.value)}
+                        onChange={(e) => {
+                          setReportLoading(true);
+                          setReportStart(e.target.value);
+                        }}
                         className="mt-1 block rounded-lg border border-slate-200 p-2"
                       />
                     </label>
@@ -907,7 +966,10 @@ export default function DashboardClient() {
                       <input
                         type="date"
                         value={reportEnd}
-                        onChange={(e) => setReportEnd(e.target.value)}
+                        onChange={(e) => {
+                          setReportLoading(true);
+                          setReportEnd(e.target.value);
+                        }}
                         className="mt-1 block rounded-lg border border-slate-200 p-2"
                       />
                     </label>
