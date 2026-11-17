@@ -58,8 +58,8 @@ export default function InstallButton() {
 
   if (!installEvent) {
     return (
-      <span className="text-xs text-gray-500">
-        To install: use your browser menu and choose Install App or Add to Home Screen.
+      <span className="block max-w-64 text-xs leading-5 text-slate-500">
+        Install KS POS from your browser menu or add it to your home screen.
       </span>
     );
   }
@@ -67,7 +67,7 @@ export default function InstallButton() {
   return (
     <button
       onClick={installApp}
-      className="rounded-lg bg-[#14251f] px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+      className="min-h-11 rounded-xl bg-[#14251f] px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
     >
       Install KS POS
     </button>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ScanLine } from "lucide-react";
 
 type BarcodeScannerProps = {
   onCodeDetected: (code: string) => boolean;
@@ -183,7 +184,7 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
   }
 
   return (
-    <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.8fr)]">
+    <div className="mt-5 grid min-w-0 gap-4 sm:mt-6 sm:gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.8fr)]">
       <div>
         <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-slate-950 sm:aspect-video">
           <video
@@ -200,7 +201,7 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
           )}
           {!isScanning && !isStarting && (
             <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center text-white">
-              <span className="text-4xl" aria-hidden="true">▦</span>
+              <ScanLine aria-hidden="true" size={32} className="text-emerald-300" />
               <p className="mt-3 text-sm font-medium">Camera preview appears here</p>
             </div>
           )}
@@ -239,7 +240,7 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
           </p>
         )}
         {scanMessage && (
-          <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
+          <p role="status" aria-live="polite" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
             {scanMessage}
           </p>
         )}

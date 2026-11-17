@@ -25,9 +25,10 @@ export default async function Home() {
     where: { id: session.id },
     select: {
       id: true,
+      name: true,
       isActive: true,
       branch: {
-        select: { isActive: true },
+        select: { isActive: true, name: true },
       },
     },
   });
@@ -36,5 +37,10 @@ export default async function Home() {
     redirect("/login");
   }
 
-  return <DashboardClient />;
+  return (
+    <DashboardClient
+      storeName={user.branch.name}
+      userName={user.name}
+    />
+  );
 }
