@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InstallButton from "./InstallButton";
+import BarcodeScanner from "./BarcodeScanner";
 
 const sections = [
   "Dashboard",
@@ -24,6 +25,7 @@ type Product = {
   price: number;
   stock: number;
   barcode: string;
+  sku: string;
 };
 
 type CartItem = Product & { quantity: number };
@@ -69,12 +71,14 @@ async function fetchInventory(): Promise<Product[]> {
       sellingPrice: number;
       stock: number;
       barcode: string | null;
+      sku: string | null;
     }) => ({
       id: product.id,
       name: product.name,
       price: Number(product.sellingPrice),
       stock: Number(product.stock),
       barcode: product.barcode || "",
+      sku: product.sku || "",
     })
   );
 }
@@ -278,20 +282,20 @@ export default function DashboardClient() {
     }
   }
 
-  function addToCart(product: Product) {
+  function addToCart(product: Product): boolean {
     setCheckoutError("");
     setReceipt(null);
 
     if (product.stock <= 0) {
       setCheckoutError(`${product.name} is out of stock.`);
-      return;
+      return false;
     }
 
     const existing = cart.find((item) => item.id === product.id);
 
     if (existing && existing.quantity >= product.stock) {
       setCheckoutError(`Not enough stock for ${product.name}.`);
-      return;
+      return false;
     }
 
     setCart((current) => {
@@ -307,6 +311,8 @@ export default function DashboardClient() {
 
       return [...current, { ...product, quantity: 1 }];
     });
+
+    return true;
   }
 
   function changeQuantity(productId: string, quantity: number) {
@@ -333,27 +339,41 @@ export default function DashboardClient() {
     );
   }
 
-  function findBarcode() {
-    const code = search.trim();
-    if (!code) return;
+  function handleScannedCode(code: string): boolean {
+    const normalizedCode = code.trim().toLowerCase();
+    if (!normalizedCode) return false;
 
     const product = products.find(
-      (item) => item.barcode.toLowerCase() === code.toLowerCase()
+      (item) =>
+        item.barcode.toLowerCase() === normalizedCode ||
+        item.sku.toLowerCase() === normalizedCode
     );
 
     if (product) {
-      addToCart(product);
+      const added = addToCart(product);
+      if (!added) return false;
       setSearch("");
-    } else {
-      setCheckoutError(`No product found with barcode: ${code}`);
+      setCheckoutError("");
+      setActive("Point of Sale");
+      return true;
     }
+
+    setCheckoutError(`No product found with barcode or SKU: ${code}`);
+    return false;
+  }
+
+  function findBarcode(): boolean {
+    const code = search.trim();
+    if (!code) return false;
+    return handleScannedCode(code);
   }
 
   const filteredProducts = products.filter((product) => {
     const term = search.toLowerCase();
     return (
       product.name.toLowerCase().includes(term) ||
-      product.barcode.toLowerCase().includes(term)
+      product.barcode.toLowerCase().includes(term) ||
+      product.sku.toLowerCase().includes(term)
     );
   });
 
@@ -905,36 +925,39 @@ export default function DashboardClient() {
               <div className="rounded-2xl border border-slate-200 bg-white p-6">
                 <h3 className="text-xl font-bold">Barcode Scanner</h3>
                 <p className="mt-2 text-sm text-slate-500">
-                  Connect a USB or Bluetooth barcode scanner. Most scanners type
-                  the barcode and press Enter.
+                  Scan product labels with your device camera or a connected scanner.
                 </p>
-                <div className="mt-5 flex flex-wrap gap-2">
+                <div className="mt-5 flex flex-col gap-2 sm:flex-row">
                   <input
                     autoFocus
+                    aria-label="Keyboard barcode or SKU scanner input"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
+                        e.preventDefault();
                         findBarcode();
-                        setActive("Point of Sale");
                       }
                     }}
-                    placeholder="Scan or enter barcode"
-                    className="min-w-0 flex-1 rounded-xl border border-slate-200 p-3"
+                    placeholder="Scan barcode or SKU with your scanner"
+                    className="min-h-12 min-w-0 flex-1 rounded-xl border border-slate-200 p-3 outline-none focus:border-emerald-500"
                   />
                   <button
+                    type="button"
                     onClick={() => {
                       findBarcode();
-                      setActive("Point of Sale");
                     }}
-                    className="rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white"
+                    className="min-h-12 rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white"
                   >
-                    Find Product
+                    Find and add product
                   </button>
                 </div>
-                <p className="mt-4 text-xs text-slate-400">
-                  Camera-based scanning is not included in this version.
-                </p>
+                {checkoutError && (
+                  <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">
+                    {checkoutError}
+                  </p>
+                )}
+                <BarcodeScanner onCodeDetected={handleScannedCode} />
               </div>
             )}
 
