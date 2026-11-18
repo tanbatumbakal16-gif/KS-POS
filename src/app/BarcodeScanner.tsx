@@ -42,6 +42,8 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
   const mountedRef = useRef(false);
   const startingRef = useRef(false);
   const scanHandledRef = useRef(false);
+  const decoderErrorCountRef = useRef(0);
+  const decoderDiagnosticShownRef = useRef(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -89,6 +91,8 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
     setIsStarting(true);
     startingRef.current = true;
     scanHandledRef.current = false;
+    decoderErrorCountRef.current = 0;
+    decoderDiagnosticShownRef.current = false;
 
     try {
       if (!window.isSecureContext) {
@@ -133,21 +137,19 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
       video.srcObject = stream;
 
       const handleTrackEnded = () => {
-        if (sessionRef.current !== session || scanHandledRef.current) return;
+        if (sessionRef.current !== session) return;
         scanHandledRef.current = true;
         stopCamera();
         setIsScanning(false);
-        setCameraError("The camera was disconnected or interrupted. Tap Restart scanner to reconnect it.");
+        const trackStates = stream.getVideoTracks().map((track) => `${track.label || "video"}: ${track.readyState}, muted=${track.muted}`).join("; ");
+        setCameraError(`Camera track ended unexpectedly (${trackStates}). Tap Restart scanner to reconnect it.`);
       };
       const handleTrackMuted = () => {
         if (sessionRef.current !== session || interruptionTimerRef.current) return;
         interruptionTimerRef.current = setTimeout(() => {
           interruptionTimerRef.current = null;
-          if (sessionRef.current !== session || scanHandledRef.current) return;
-          scanHandledRef.current = true;
-          stopCamera();
-          setIsScanning(false);
-          setCameraError("Safari paused access to the camera. Return to this page and tap Restart scanner.");
+          if (sessionRef.current !== session) return;
+          setCameraError("Safari muted the camera track for over three seconds. The scanner is still active; return to this page or tap Stop if you want to close it.");
         }, 3000);
       };
       const handleTrackUnmuted = () => {
@@ -205,33 +207,31 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
 
       const controls = await reader.decodeFromVideoElement(
         video,
-        (result, error, controls) => {
+        (result, error) => {
           if (sessionRef.current !== session) return;
           if (!result) {
-            const retryableErrors = [
-              "NotFoundException",
-              "ChecksumException",
-              "FormatException",
-            ];
-
-            if (error && !retryableErrors.includes(error.name)) {
-              scanHandledRef.current = true;
-              controlsRef.current = controls;
-              stopCamera();
-              setIsScanning(false);
-              setCameraError(cameraErrorMessage(error));
+            if (error && !["NotFoundException", "ChecksumException", "FormatException"].includes(error.name)) {
+              decoderErrorCountRef.current += 1;
+              if (decoderErrorCountRef.current >= 3 && !decoderDiagnosticShownRef.current) {
+                decoderDiagnosticShownRef.current = true;
+                setCameraError(`Camera is still running, but ZXing reported repeated frame errors (${error.name}: ${error.message}). Keep the camera open or restart if scanning does not recover.`);
+              }
+            } else {
+              decoderErrorCountRef.current = 0;
+            }
+            // ZXing reports errors for individual frames as well as fatal setup
+            // errors. A bad/temporarily unavailable frame must not end the stream.
+            if (scanHandledRef.current) {
+              scanHandledRef.current = false;
             }
             return;
           }
 
           if (scanHandledRef.current) return;
 
+          decoderErrorCountRef.current = 0;
           scanHandledRef.current = true;
           const code = result.getText().trim();
-          controlsRef.current = controls;
-          stopCamera();
-          setIsScanning(false);
-
           const matched = onCodeDetected(code);
           setScanMessage(
             matched
@@ -264,7 +264,7 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
         } else if (error instanceof Error && error.message === "camera-unsupported") {
           setCameraError("This browser does not support camera access. Use a USB or Bluetooth barcode scanner instead.");
         } else {
-          setCameraError(cameraErrorMessage(error));
+          setCameraError(`${cameraErrorMessage(error)}${error instanceof Error ? ` [${error.name}: ${error.message}]` : ` [${String(error)}]`}`);
         }
         setIsScanning(false);
       }
@@ -277,6 +277,8 @@ export default function BarcodeScanner({ onCodeDetected }: BarcodeScannerProps) 
   function stopScanning() {
     stopCamera();
     scanHandledRef.current = false;
+    decoderErrorCountRef.current = 0;
+    decoderDiagnosticShownRef.current = false;
     setIsScanning(false);
     setScanMessage("Camera stopped.");
   }
