@@ -1,5 +1,5 @@
 
-import { NextRequest, NextResponse } from "next/server";
+import { connection, NextRequest, NextResponse } from "next/server";
 import { SaleStatus } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -9,6 +9,9 @@ const round = (value: number) =>
 
 export async function GET(request: NextRequest) {
   try {
+    // Reports depend on request-specific date parameters and authenticated data.
+    await connection();
+
     // Access request-specific data before reading session cookies.
     const params = request.nextUrl.searchParams;
     const startParam = params.get("start");

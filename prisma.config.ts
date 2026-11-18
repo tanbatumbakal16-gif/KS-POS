@@ -1,6 +1,17 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
+const directUrl = process.env.DIRECT_URL ?? "";
+const prismaArgs = process.argv.slice(2);
+const databaseCommands = new Set(["db", "diff", "migrate", "studio"]);
+
+const isDatabaseCommand = prismaArgs.some((argument) => databaseCommands.has(argument)) ||
+  (prismaArgs.includes("generate") && prismaArgs.includes("--sql"));
+
+if (!directUrl && isDatabaseCommand) {
+  throw new Error("DIRECT_URL is required for Prisma database commands. Configure the Neon direct connection URL locally.");
+}
+
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
@@ -8,8 +19,8 @@ export default defineConfig({
   },
   engine: "classic",
   datasource: {
-    // Prisma generate does not need a live database URL. For local commands,
-    // allow DATABASE_URL when DIRECT_URL is not configured.
-    url: process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? "postgresql://localhost:5432/ks_pos?schema=public",
+    // Prisma CLI commands use only Neon’s direct URL. An absent value stays
+    // empty so offline validation and generation have no database fallback.
+    url: directUrl,
   },
 });

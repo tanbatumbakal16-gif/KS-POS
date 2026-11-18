@@ -1,12 +1,34 @@
 
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import DashboardClient from "./DashboardClient";
 
 export const instant = false;
 
-export default async function Home() {
+function HomeFallback() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-950 p-4 text-sm text-slate-300">
+      Loading KS POS...
+    </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<HomeFallback />}>
+      <RequestHome />
+    </Suspense>
+  );
+}
+
+async function RequestHome() {
+  // Setup state and user sessions are database/request specific; keep them out
+  // of the build-time static shell.
+  await connection();
+
   const ownerCount = await prisma.user.count({
     where: { role: "OWNER" },
   });

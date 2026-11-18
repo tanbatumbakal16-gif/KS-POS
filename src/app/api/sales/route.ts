@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { Prisma, PaymentMethod, SaleStatus, StockMovementType } from "@prisma/client";
 import { randomUUID } from "crypto";
-import { getSession } from "@/lib/auth";
+import { getInventoryActor } from "@/lib/inventory-access";
 import { prisma } from "@/lib/prisma";
 
 type CheckoutItem = {
@@ -30,7 +30,7 @@ const validMethods = Object.values(PaymentMethod);
 
 export async function POST(request: Request) {
   try {
-    const session = await getSession();
+    const session = await getInventoryActor();
 
     if (!session) {
       return NextResponse.json(
@@ -289,6 +289,7 @@ export async function POST(request: Request) {
           await tx.stockMovement.create({
             data: {
               productId: item.productId,
+              branchId: session.branchId,
               type: StockMovementType.SALE,
               quantity: new Prisma.Decimal(item.quantity.toFixed(3)),
               note: `Sale ${receiptNumber} - Branch ${session.branchId}`,

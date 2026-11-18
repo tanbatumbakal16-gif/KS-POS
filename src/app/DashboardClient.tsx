@@ -5,12 +5,14 @@ import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import {
   Building,
+  AlertTriangle,
   ChartNoAxesCombined,
   CircleCheck,
   LayoutDashboard,
   LogOut,
   Menu,
   Package,
+  Pencil,
   Plus,
   Receipt,
   ScanLine,
@@ -68,10 +70,23 @@ type Product = {
   id: string;
   name: string;
   price: number;
+  costPrice: number;
   stock: number;
+  lowStockAt: number;
   barcode: string;
   sku: string;
   imageUrl: string | null;
+  description: string | null;
+  category: string | null;
+  unit: string;
+};
+
+type StockMovement = {
+  id: string;
+  type: string;
+  quantity: number;
+  note: string | null;
+  createdAt: string;
 };
 
 type CartItem = Product & { quantity: number };
@@ -102,7 +117,10 @@ type ReportData = {
   }>;
 };
 
-async function fetchInventory(): Promise<Product[]> {
+async function fetchInventory(): Promise<{
+  products: Product[];
+  permissions: { canManageStock: boolean; canEditCatalog: boolean };
+}> {
   const response = await fetch("/api/inventory");
   const data = await response.json();
 
@@ -110,25 +128,38 @@ async function fetchInventory(): Promise<Product[]> {
     throw new Error(data.error || "Unable to load inventory.");
   }
 
-  return (data.products || []).map(
-    (product: {
-      id: string;
-      name: string;
-      sellingPrice: number;
-      stock: number;
-      barcode: string | null;
-      sku: string | null;
-      imageUrl: string | null;
-    }) => ({
-      id: product.id,
-      name: product.name,
-      price: Number(product.sellingPrice),
-      stock: Number(product.stock),
-      barcode: product.barcode || "",
-      sku: product.sku || "",
-      imageUrl: product.imageUrl,
-    })
-  );
+  return {
+    products: (data.products || []).map(
+      (product: {
+        id: string;
+        name: string;
+        sellingPrice: number;
+        costPrice?: number;
+        stock: number;
+        lowStockAt: number;
+        barcode: string | null;
+        sku: string | null;
+        imageUrl: string | null;
+        description: string | null;
+        category: string | null;
+        unit: string;
+      }) => ({
+        id: product.id,
+        name: product.name,
+        price: Number(product.sellingPrice),
+        costPrice: Number(product.costPrice ?? 0),
+        stock: Number(product.stock),
+        lowStockAt: Number(product.lowStockAt),
+        barcode: product.barcode || "",
+        sku: product.sku || "",
+        imageUrl: product.imageUrl,
+        description: product.description,
+        category: product.category,
+        unit: product.unit,
+      })
+    ),
+    permissions: data.permissions || { canManageStock: false, canEditCatalog: false },
+  };
 }
 
 async function fetchReports(start: string, end: string): Promise<ReportData> {
@@ -167,12 +198,29 @@ export default function DashboardClient({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
+  const [canManageInventory, setCanManageInventory] = useState(false);
+  const [canEditCatalog, setCanEditCatalog] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
+  const [costPrice, setCostPrice] = useState("");
   const [stock, setStock] = useState("");
+  const [lowStockAt, setLowStockAt] = useState("5");
   const [barcode, setBarcode] = useState("");
   const [sku, setSku] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [unit, setUnit] = useState("pcs");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [imageViewer, setImageViewer] = useState<string | null>(null);
+  const [stockProduct, setStockProduct] = useState<Product | null>(null);
+  const [stockDirection, setStockDirection] = useState<"ADD" | "REMOVE">("ADD");
+  const [stockQuantity, setStockQuantity] = useState("");
+  const [stockReason, setStockReason] = useState("");
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const [inventoryLoading, setInventoryLoading] = useState(true);
   const [inventoryError, setInventoryError] = useState("");
@@ -206,7 +254,10 @@ export default function DashboardClient({
     try {
       setInventoryLoading(true);
       setInventoryError("");
-      setProducts(await fetchInventory());
+      const inventory = await fetchInventory();
+      setProducts(inventory.products);
+      setCanManageInventory(inventory.permissions.canManageStock);
+      setCanEditCatalog(inventory.permissions.canEditCatalog);
     } catch (error) {
       setInventoryError(
         error instanceof Error ? error.message : "Inventory loading failed."
@@ -247,7 +298,9 @@ export default function DashboardClient({
       try {
         const inventory = await fetchInventory();
         if (!cancelled) {
-          setProducts(inventory);
+          setProducts(inventory.products);
+          setCanManageInventory(inventory.permissions.canManageStock);
+          setCanEditCatalog(inventory.permissions.canEditCatalog);
           setInventoryError("");
         }
       } catch (error) {
@@ -307,55 +360,173 @@ export default function DashboardClient({
     return () => window.removeEventListener("keydown", handleEscape);
   }, [showMoreMenu]);
 
+  function openProductForm(product?: Product) {
+    setEditingProductId(product?.id ?? null);
+    setName(product?.name ?? "");
+    setPrice(product ? String(product.price) : "");
+    setCostPrice(product ? String(product.costPrice) : "");
+    setStock("");
+    setLowStockAt(product ? String(product.lowStockAt) : "5");
+    setBarcode(product?.barcode ?? "");
+    setSku(product?.sku ?? "");
+    setDescription(product?.description ?? "");
+    setCategory(product?.category ?? "");
+    setUnit(product?.unit ?? "pcs");
+    setPhotoFile(null);
+    setPhotoPreview(product?.imageUrl ?? "");
+    setInventoryError("");
+    setShowAdd(true);
+  }
+
+  function closeProductForm() {
+    if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
+    setShowAdd(false);
+    setEditingProductId(null);
+    setPhotoFile(null);
+    setPhotoPreview("");
+    setInventoryError("");
+  }
+
+  async function uploadProductPhoto(productId: string, file: File) {
+    const form = new FormData();
+    form.set("photo", file);
+    const response = await fetch(`/api/inventory/${encodeURIComponent(productId)}/image`, {
+      method: "POST",
+      body: form,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Unable to upload product photo.");
+  }
+
+  async function removeProductPhoto() {
+    if (!editingProductId) return;
+    try {
+      setSaving(true);
+      const response = await fetch(`/api/inventory/${encodeURIComponent(editingProductId)}/image`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to remove product photo.");
+      if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
+      setPhotoFile(null);
+      setPhotoPreview("");
+      await loadInventory();
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : "Unable to remove product photo.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function addProduct(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setInventoryError("");
 
-    if (
-      !name.trim() ||
-      !Number.isFinite(Number(price)) ||
-      Number(price) < 0 ||
-      !Number.isFinite(Number(stock)) ||
-      Number(stock) < 0
-    ) {
-      setInventoryError("Please enter valid product details.");
+    const editingManagerThresholdOnly = Boolean(editingProductId && !canEditCatalog);
+    if (!editingManagerThresholdOnly && (!name.trim() || !Number.isFinite(Number(price)) || Number(price) < 0 || !Number.isFinite(Number(costPrice)) || Number(costPrice) < 0)) {
+      setInventoryError("Enter a product name and valid cost and selling prices.");
+      return;
+    }
+    if (!Number.isFinite(Number(lowStockAt)) || Number(lowStockAt) < 0) {
+      setInventoryError("Enter a valid non-negative low-stock threshold.");
+      return;
+    }
+    if (!editingProductId && (!Number.isFinite(Number(stock)) || Number(stock) < 0)) {
+      setInventoryError("Enter a valid opening stock quantity.");
       return;
     }
 
     try {
       setSaving(true);
-
-      const response = await fetch("/api/inventory", {
-        method: "POST",
+      let productId = editingProductId;
+      const payload = editingManagerThresholdOnly
+        ? { lowStockAt: Number(lowStockAt) }
+        : {
+            name: name.trim(),
+            barcode: barcode.trim(),
+            sku: sku.trim(),
+            description: description.trim(),
+            category: category.trim(),
+            unit: unit.trim() || "pcs",
+            sellingPrice: Number(price),
+            costPrice: Number(costPrice),
+            lowStockAt: Number(lowStockAt),
+            ...(!productId ? { quantity: Number(stock) } : {}),
+          };
+      const response = await fetch(productId ? `/api/inventory/${encodeURIComponent(productId)}` : "/api/inventory", {
+        method: productId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          barcode: barcode.trim(),
-          sku: sku.trim(),
-          sellingPrice: Number(price),
-          costPrice: 0,
-          quantity: Number(stock),
-          lowStockAt: 5,
-        }),
+        body: JSON.stringify(payload),
       });
-
       const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to save product.");
+      if (!productId) {
+        productId = data.product.id as string;
+        setEditingProductId(productId);
+      }
 
-      if (!response.ok) {
-        throw new Error(data.error || "Unable to save product.");
+      if (photoFile && canEditCatalog && productId) {
+        try {
+          await uploadProductPhoto(productId, photoFile);
+        } catch (error) {
+          await loadInventory();
+          throw new Error(`${error instanceof Error ? error.message : "Photo upload failed."} Product details were saved; retry the photo upload.`);
+        }
       }
 
       await loadInventory();
-      setName("");
-      setPrice("");
+      closeProductForm();
       setStock("");
-      setBarcode("");
-      setSku("");
-      setShowAdd(false);
     } catch (error) {
-      setInventoryError(
-        error instanceof Error ? error.message : "Unable to save product."
-      );
+      setInventoryError(error instanceof Error ? error.message : "Unable to save product.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openStockDialog(product: Product) {
+    setStockProduct(product);
+    setStockDirection("ADD");
+    setStockQuantity("");
+    setStockReason("");
+    setStockMovements([]);
+    setHistoryLoading(true);
+    try {
+      const response = await fetch(`/api/inventory/${encodeURIComponent(product.id)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to load stock history.");
+      setStockMovements(data.movements || []);
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : "Unable to load stock history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function adjustStock(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!stockProduct) return;
+    if (!Number.isFinite(Number(stockQuantity)) || Number(stockQuantity) <= 0 || stockReason.trim().length < 3) {
+      setInventoryError("Enter a positive quantity and a reason with at least three characters.");
+      return;
+    }
+    try {
+      setSaving(true);
+      setInventoryError("");
+      const response = await fetch(`/api/inventory/${encodeURIComponent(stockProduct.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction: stockDirection, quantity: Number(stockQuantity), reason: stockReason.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to adjust stock.");
+      await loadInventory();
+      setStockProduct((current) => current ? { ...current, stock: Number(data.stock), lowStockAt: Number(data.lowStockAt) } : current);
+      setStockQuantity("");
+      setStockReason("");
+      const history = await fetch(`/api/inventory/${encodeURIComponent(stockProduct.id)}`);
+      const historyData = await history.json();
+      if (history.ok) setStockMovements(historyData.movements || []);
+    } catch (error) {
+      setInventoryError(error instanceof Error ? error.message : "Unable to adjust stock.");
     } finally {
       setSaving(false);
     }
@@ -462,6 +633,7 @@ export default function DashboardClient({
 
   const discountValue = Math.max(0, Number(discount) || 0);
   const total = Math.max(0, Number((subtotal - discountValue).toFixed(2)));
+  const lowStockProducts = products.filter((product) => product.stock <= product.lowStockAt);
 
   async function completeSale() {
     setCheckoutError("");
@@ -1000,13 +1172,13 @@ export default function DashboardClient({
                       Manage your store products.
                     </p>
                   </div>
-                  <button
+                  {canManageInventory && <button
                     type="button"
-                    onClick={() => setShowAdd(true)}
+                    onClick={() => openProductForm()}
                     className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white"
                   >
                     <Plus aria-hidden="true" size={17} />Add product
-                  </button>
+                  </button>}
                 </div>
 
                 {inventoryLoading && (
@@ -1017,6 +1189,21 @@ export default function DashboardClient({
                   <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
                     {inventoryError}
                   </p>
+                )}
+
+                {!inventoryLoading && lowStockProducts.length > 0 && (
+                  <section role="status" aria-label="Low-stock alerts" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 sm:p-4">
+                    <div className="flex items-center gap-2 text-sm font-bold text-amber-900">
+                      <AlertTriangle aria-hidden="true" size={18} />
+                      {lowStockProducts.length} low-stock {lowStockProducts.length === 1 ? "product" : "products"} in {storeName}
+                    </div>
+                    <ul className="mt-2 grid gap-1 text-xs text-amber-900 sm:grid-cols-2 lg:grid-cols-3">
+                      {lowStockProducts.slice(0, 9).map((product) => (
+                        <li key={product.id} className="truncate">{product.name}: {product.stock} {product.unit} left (alert at {product.lowStockAt})</li>
+                      ))}
+                    </ul>
+                    {lowStockProducts.length > 9 && <p className="mt-1 text-xs text-amber-800">And {lowStockProducts.length - 9} more.</p>}
+                  </section>
                 )}
 
                 {!inventoryLoading && products.length === 0 && (
@@ -1030,18 +1217,25 @@ export default function DashboardClient({
                     <article key={product.id} className="flex min-w-0 gap-3 rounded-xl border border-slate-200 p-3">
                       <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-50">
                         {product.imageUrl ? (
-                          <Image src={product.imageUrl} alt={product.name} width={72} height={72} unoptimized className="h-full w-full object-contain" />
+                          <button type="button" onClick={() => setImageViewer(product.imageUrl)} aria-label={`View full photo of ${product.name}`} className="relative h-full w-full">
+                            <Image src={product.imageUrl} alt={product.name} fill unoptimized sizes="64px" className="object-contain" />
+                          </button>
                         ) : (
                           <Package aria-hidden="true" size={24} className="text-slate-300" />
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
                         <h4 className="line-clamp-2 text-sm font-semibold leading-5 text-slate-900">{product.name}</h4>
-                        <p className="mt-1 text-sm font-bold text-emerald-700">{peso(product.price)}</p>
+                        <p className="mt-1 text-sm font-bold text-emerald-700">Sell {peso(product.price)}</p>
+                        <p className="text-xs text-slate-500">Cost {peso(product.costPrice)}</p>
                         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-500">
-                          <span className={product.stock <= 5 ? "font-semibold text-amber-700" : ""}>Stock {product.stock}</span>
+                          <span className={product.stock <= product.lowStockAt ? "font-semibold text-amber-700" : ""}>Stock {product.stock} {product.unit} · alert {product.lowStockAt}</span>
                           {product.barcode && <span className="max-w-full truncate">{product.barcode}</span>}
                         </div>
+                        {canManageInventory && <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-2">
+                          <button type="button" onClick={() => void openStockDialog(product)} className="min-h-10 flex-1 rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700">Adjust stock / history</button>
+                          <button type="button" onClick={() => openProductForm(product)} aria-label={`Edit ${product.name}`} className="flex min-h-10 items-center gap-1 rounded-lg bg-emerald-50 px-3 text-xs font-semibold text-emerald-800"><Pencil aria-hidden="true" size={14} />Edit</button>
+                        </div>}
                       </div>
                     </article>
                   ))}
@@ -1053,8 +1247,10 @@ export default function DashboardClient({
                       <tr>
                         <th className="p-3">Product</th>
                         <th className="p-3">Barcode</th>
-                        <th className="p-3">Price</th>
-                        <th className="p-3">Stock</th>
+                        {canManageInventory && <th className="p-3">Cost</th>}
+                        <th className="p-3">Selling price</th>
+                        <th className="p-3">Stock / alert</th>
+                        {canManageInventory && <th className="p-3">Actions</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -1064,7 +1260,9 @@ export default function DashboardClient({
                             <div className="flex items-center gap-3">
                               <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-50">
                                 {product.imageUrl ? (
-                                  <Image src={product.imageUrl} alt={product.name} width={48} height={48} unoptimized className="h-full w-full object-contain" />
+                                  <button type="button" onClick={() => setImageViewer(product.imageUrl)} aria-label={`View full photo of ${product.name}`} className="relative h-full w-full">
+                                    <Image src={product.imageUrl} alt={product.name} fill unoptimized sizes="48px" className="object-contain" />
+                                  </button>
                                 ) : (
                                   <Package aria-hidden="true" size={18} className="text-slate-300" />
                                 )}
@@ -1073,8 +1271,13 @@ export default function DashboardClient({
                             </div>
                           </td>
                           <td className="p-3">{product.barcode || "—"}</td>
+                          {canManageInventory && <td className="p-3">{peso(product.costPrice)}</td>}
                           <td className="p-3">{peso(product.price)}</td>
-                          <td className="p-3">{product.stock}</td>
+                          <td className={`p-3 ${product.stock <= product.lowStockAt ? "font-semibold text-amber-800" : ""}`}>{product.stock} {product.unit} / {product.lowStockAt}</td>
+                          {canManageInventory && <td className="p-3"><div className="flex gap-2">
+                            <button type="button" onClick={() => void openStockDialog(product)} className="min-h-10 rounded-lg border px-3 text-xs font-semibold">Adjust / history</button>
+                            <button type="button" onClick={() => openProductForm(product)} aria-label={`Edit ${product.name}`} className="min-h-10 rounded-lg bg-emerald-50 px-3 text-xs font-semibold text-emerald-800">Edit</button>
+                          </div></td>}
                         </tr>
                       ))}
                     </tbody>
@@ -1468,14 +1671,17 @@ export default function DashboardClient({
             role="dialog"
             aria-modal="true"
             aria-labelledby="add-product-title"
-            className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-2xl sm:p-6"
+            className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-2xl sm:p-6"
           >
             <div className="flex items-center justify-between">
-              <h3 id="add-product-title" className="text-lg font-bold text-slate-900 sm:text-xl">Add product</h3>
+              <div>
+                <h3 id="add-product-title" className="text-lg font-bold text-slate-900 sm:text-xl">{editingProductId ? "Edit product" : "Add product"}</h3>
+                {editingProductId && !canEditCatalog && <p className="mt-1 text-xs text-slate-500">Managers can change this branch’s alert threshold. Shared product details are owner-managed.</p>}
+              </div>
               <button
                 type="button"
-                onClick={() => setShowAdd(false)}
-                aria-label="Close add product form"
+                onClick={closeProductForm}
+                aria-label="Close product form"
                 className="flex size-10 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"
               >
                 <X aria-hidden="true" size={19} />
@@ -1487,6 +1693,8 @@ export default function DashboardClient({
                 Product name
                 <input
                   required
+                  maxLength={120}
+                  disabled={Boolean(editingProductId && !canEditCatalog)}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base"
@@ -1497,6 +1705,8 @@ export default function DashboardClient({
               <label className="block text-sm font-medium">
                 Barcode
                 <input
+                  maxLength={128}
+                  disabled={Boolean(editingProductId && !canEditCatalog)}
                   value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
                   className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base"
@@ -1507,6 +1717,8 @@ export default function DashboardClient({
               <label className="block text-sm font-medium">
                 SKU
                 <input
+                  maxLength={64}
+                  disabled={Boolean(editingProductId && !canEditCatalog)}
                   value={sku}
                   onChange={(e) => setSku(e.target.value)}
                   className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base"
@@ -1522,25 +1734,73 @@ export default function DashboardClient({
                     type="number"
                     min="0"
                     step="0.01"
+                    max="9999999999.99"
+                    disabled={Boolean(editingProductId && !canEditCatalog)}
                     value={price}
                     onChange={(e) => setPrice(e.target.value)}
                     className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base"
                   />
                 </label>
 
-                <label className="block text-sm font-medium">
+                {!editingProductId && <label className="block text-sm font-medium">
                   Opening stock
                   <input
                     required
                     type="number"
                     min="0"
-                    step="1"
+                    max="999999999.999"
+                    step="0.001"
                     value={stock}
                     onChange={(e) => setStock(e.target.value)}
                     className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base"
                   />
-                </label>
+                </label>}
               </div>
+              <label className="block text-sm font-medium">
+                Cost price (₱)
+                <input required type="number" min="0" max="9999999999.99" step="0.01" disabled={Boolean(editingProductId && !canEditCatalog)} value={costPrice} onChange={(e) => setCostPrice(e.target.value)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base disabled:bg-slate-100" />
+              </label>
+              <label className="block text-sm font-medium">
+                Low-stock alert at
+                <input required type="number" min="0" max="999999999.999" step="0.001" value={lowStockAt} onChange={(e) => setLowStockAt(e.target.value)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base" />
+              </label>
+              {(!editingProductId || canEditCatalog) && <>
+                <label className="block text-sm font-medium">
+                  Category
+                  <input maxLength={80} value={category} onChange={(e) => setCategory(e.target.value)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base" />
+                </label>
+                <label className="block text-sm font-medium">
+                  Unit
+                  <input required maxLength={20} value={unit} onChange={(e) => setUnit(e.target.value)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3 text-base" placeholder="pcs, kg, bottle" />
+                </label>
+                <label className="block text-sm font-medium sm:col-span-2">
+                  Description
+                  <textarea maxLength={1000} value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="mt-2 w-full rounded-xl border border-slate-200 p-3 text-base" />
+                </label>
+                {canEditCatalog && <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium">
+                    Product photo (JPEG, PNG or WebP; up to 5 MB)
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
+                      const file = event.target.files?.[0] ?? null;
+                      if (file && file.size > 5 * 1024 * 1024) {
+                        setInventoryError("Photo must be 5 MB or smaller.");
+                        event.target.value = "";
+                        return;
+                      }
+                      if (photoPreview.startsWith("blob:")) URL.revokeObjectURL(photoPreview);
+                      setPhotoFile(file);
+                      setPhotoPreview(file ? URL.createObjectURL(file) : editingProductId ? products.find((product) => product.id === editingProductId)?.imageUrl ?? "" : "");
+                      setInventoryError("");
+                    }} className="mt-2 block min-h-12 w-full rounded-xl border border-slate-200 p-3 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-3 file:py-2 file:font-semibold file:text-emerald-800" />
+                  </label>
+                  {photoPreview && <div className="mt-3 flex items-center gap-3">
+                    <button type="button" onClick={() => setImageViewer(photoPreview)} className="relative h-28 w-28 overflow-hidden rounded-xl border border-slate-200 bg-slate-50" aria-label="Preview full product photo">
+                      <Image src={photoPreview} alt="Product photo preview" fill unoptimized sizes="112px" className="object-contain" />
+                    </button>
+                    {editingProductId && !photoFile && <button type="button" disabled={saving} onClick={() => void removeProductPhoto()} className="min-h-10 rounded-lg border border-red-200 px-3 text-xs font-semibold text-red-700 disabled:opacity-50">Remove photo</button>}
+                  </div>}
+                </div>}
+              </>}
             </div>
 
             {inventoryError && (
@@ -1552,9 +1812,69 @@ export default function DashboardClient({
               disabled={saving}
               className="mt-5 min-h-12 w-full rounded-xl bg-emerald-600 px-4 py-3 font-semibold text-white disabled:opacity-50 sm:mt-6"
             >
-              {saving ? "Saving..." : "Save Product"}
+              {saving ? "Saving..." : editingProductId ? "Save changes" : "Save product"}
             </button>
           </form>
+        </div>
+      )}
+
+      {stockProduct && (
+        <div className="fixed inset-0 z-50 flex overflow-y-auto overscroll-contain bg-slate-950/50 p-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:items-center sm:p-5">
+          <section role="dialog" aria-modal="true" aria-labelledby="stock-dialog-title" className="my-auto max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl bg-white p-4 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 id="stock-dialog-title" className="text-lg font-bold text-slate-900 sm:text-xl">Stock adjustment</h3>
+                <p className="mt-1 truncate text-sm text-slate-600">{stockProduct.name} · {stockProduct.stock} {stockProduct.unit} in {storeName}</p>
+              </div>
+              <button type="button" onClick={() => setStockProduct(null)} aria-label="Close stock adjustment" className="flex size-10 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100"><X aria-hidden="true" size={19} /></button>
+            </div>
+
+            <form onSubmit={adjustStock} className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm font-medium">
+                Adjustment
+                <select value={stockDirection} onChange={(event) => setStockDirection(event.target.value as "ADD" | "REMOVE")} className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3">
+                  <option value="ADD">Add stock</option>
+                  <option value="REMOVE">Remove stock</option>
+                </select>
+              </label>
+              <label className="block text-sm font-medium">
+                Quantity ({stockProduct.unit})
+                <input required type="number" min="0.001" max="999999999.999" step="0.001" value={stockQuantity} onChange={(event) => setStockQuantity(event.target.value)} className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3" />
+              </label>
+              <label className="block text-sm font-medium sm:col-span-2">
+                Reason
+                <input required minLength={3} maxLength={240} value={stockReason} onChange={(event) => setStockReason(event.target.value)} placeholder="For example: damaged goods, count correction, delivery" className="mt-2 min-h-12 w-full rounded-xl border border-slate-200 p-3" />
+              </label>
+              {inventoryError && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700 sm:col-span-2">{inventoryError}</p>}
+              <button type="submit" disabled={saving} className="min-h-12 rounded-xl bg-emerald-600 px-4 font-semibold text-white disabled:opacity-50 sm:col-span-2">{saving ? "Saving adjustment…" : "Save stock adjustment"}</button>
+            </form>
+
+            <div className="mt-6 border-t border-slate-200 pt-4">
+              <h4 className="font-bold text-slate-900">Recent stock history</h4>
+              {historyLoading ? <p className="mt-3 text-sm text-slate-500">Loading history…</p> : stockMovements.length === 0 ? <p className="mt-3 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No branch stock movements recorded yet.</p> : (
+                <ol className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+                  {stockMovements.map((movement) => (
+                    <li key={movement.id} className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 rounded-xl bg-slate-50 p-3 text-sm">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-slate-800">{movement.type.replaceAll("_", " ")}: {movement.note || "No reason recorded"}</p>
+                        <p className="mt-1 text-xs text-slate-500">{new Date(movement.createdAt).toLocaleString("en-PH")}</p>
+                      </div>
+                      <span className={`font-bold ${movement.type === "ADJUSTMENT" && movement.quantity < 0 ? "text-red-700" : "text-slate-800"}`}>{movement.type === "ADJUSTMENT" && movement.quantity > 0 ? "+" : ""}{movement.quantity} {stockProduct.unit}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {imageViewer && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/90 p-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:p-8" onClick={() => setImageViewer(null)}>
+          <button type="button" onClick={() => setImageViewer(null)} aria-label="Close full product photo" className="absolute right-4 top-[calc(env(safe-area-inset-top)+1rem)] z-10 flex size-11 items-center justify-center rounded-full bg-white/15 text-white"><X aria-hidden="true" size={22} /></button>
+          <div className="relative h-full max-h-[90dvh] w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
+            <Image src={imageViewer} alt="Full-size product" fill unoptimized sizes="100vw" className="object-contain" />
+          </div>
         </div>
       )}
     </main>
